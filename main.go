@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"log/slog"
 	"math/rand"
@@ -151,13 +152,13 @@ func setupOTel(ctx context.Context) (func(context.Context) error, error) {
 	return func(ctx context.Context) error {
 		var result error
 		if err := lp.Shutdown(ctx); err != nil {
-			result = err
+			result = errors.Join(result, err)
 		}
 		if err := mp.Shutdown(ctx); err != nil {
-			result = err
+			result = errors.Join(result, err)
 		}
 		if err := tp.Shutdown(ctx); err != nil {
-			result = err
+			result = errors.Join(result, err)
 		}
 		return result
 	}, nil

@@ -1,0 +1,285 @@
+# ─────────────────────────────────────────────────────────────────────────────
+# otel-collector.yaml
+# Deploys the OpenTelemetry Collector as a Deployment on AKS.
+# Receives OTLP from all application pods and forwards to Azure Monitor.
+#
+# Apply order:
+#   1. namespace.yaml (if needed)
+#   2. rbac.yaml
+#   3. otel-collector.yaml
+#   4. demo-app.yaml
+# ─────────────────────────────────────────────────────────────────────────────
+
+# ── Namespace ─────────────────────────────────────────────────────────────────
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: observability
+
+---
+# ── ServiceAccount ────────────────────────────────────────────────────────────
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: otel-collector
+  namespace: observability
+
+---
+# ── ClusterRole: k8sattributes processor needs pod/node list+get ──────────────
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: otel-collector
+rules:
+  - apiGroups: [""]
+    resources: ["nodes", "nodes/proxy", "services", "endpoints", "pods"]
+    verbs: ["get", "list", "watch"]
+  - apiGroups: ["apps"]
+    resources: ["replicasets"]
+    verbs: ["get", "list", "watch"]
+  - apiGroups: ["extensions"]
+    resources: ["replicasets"]
+    verbs: ["get", "list", "watch"]
+
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: otel-collector
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: otel-collector
+subjects:
+  - kind: ServiceAccount
+    name: otel-collector
+    namespace: observability
+
+---
+# ── Secret: Azure Monitor connection string ───────────────────────────────────
+# Replace <YOUR_CONNECTION_STRING> with your Application Insights
+# connection string, or manage this via Azure Key Vault + CSI driver.
+apiVersion: v1
+kind: Secret
+metadata:
+  name: azure-monitor-secret
+  namespace: observability
+type: Opaque
+stringData:
+  APPLICATIONINSIGHTS_CONNECTION_STRING: "45409d90-e656-4f6a-9211-6057b280d567;IngestionEndpoint=https://westus2-2.in.applicationinsights.azure.com/;LiveEndpoint=https://westus2.livediagnostics.monitor.azure.com/;ApplicationId=26522a44-99a2-427e-9903-7e5cc02fade9"
+
+---
+# ── ConfigMap: collector config ───────────────────────────────────────────────
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: otel-collector-config
+  namespace: observability
+data:
+  config.yaml: |
+    receivers:
+      otlp:
+        protocols:
+          grpc:
+            endpoint: 0.0.0.0:4317
+          http:
+            endpoint: 0.0.0.0:4318
+      prometheus:
+        config:
+          scrape_configs:
+            - job_name: otel-collector
+              scrape_interval: 30s
+              static_configs:
+                - targets: [localhost:8888]
+
+    processors:
+      memory_limiter:
+        check_interval: 1s
+        limit_mib: 400
+        spike_limit_mib: 100
+      batch:
+        send_batch_size: 1024
+        timeout: 10s
+        send_batch_max_size: 2048
+      attributes:
+        actions:
+          - key: k8s.cluster.name
+            value: ${env:K8S_CLUSTER_NAME}
+            action: upsert
+      k8sattributes:
+        auth_type: serviceAccount
+        passthrough: false
+        extract:
+          metadata:
+            - k8s.pod.name
+            - k8s.pod.uid
+            - k8s.deployment.name
+            - k8s.namespace.name
+            - k8s.node.name
+            - container.image.name
+            - container.image.tag
+        pod_association:
+          - sources:
+              - from: resource_attribute
+                name: k8s.pod.ip
+          - sources:
+              - from: resource_attribute
+                name: k8s.pod.name
+          - sources:
+              - from: connection
+      resourcedetection:
+        detectors: [env, azure]
+        timeout: 10s
+        override: false
+
+    exporters:
+      # azuremonitor:
+      #  connection_string: ${env:APPLICATIONINSIGHTS_CONNECTION_STRING}
+      otlp_http/azuremonitor:
+        metrics_endpoint: "https://otlpdce-ex-bb9p.westus2-1.metrics.ingest.monitor.azure.com/datacollectionRules/dcr-510db2c7534a458a8e8e64a79155b2df/streams/Custom-Metrics-Otel/otlp/v1/metrics"
+        traces_endpoint: "https://otlpdce-ex-bb9p.westus2-1.ingest.monitor.azure.com/datacollectionRules/dcr-510db2c7534a458a8e8e64a79155b2df/streams/Microsoft-OTLP-Traces/otlp/v1/traces"
+        logs_endpoint: "https://otlpdce-ex-bb9p.westus2-1.ingest.monitor.azure.com/datacollectionRules/dcr-510db2c7534a458a8e8e64a79155b2df/streams/Microsoft-OTLP-Logs/otlp/v1/logs"
+        auth:
+          authenticator: azure_auth/monitor
+      debug:
+        verbosity: detailed
+        sampling_initial: 5
+        sampling_thereafter: 200
+
+    extensions:
+      health_check:
+        endpoint: 0.0.0.0:13133
+      zpages:
+        endpoint: 0.0.0.0:55679
+      azure_auth/monitor:
+        managed_identity:
+          client_id: ""
+        scopes:
+          - https://monitor.azure.com/.default
+
+    service:
+      extensions: [health_check, zpages, azure_auth/monitor]
+      pipelines:
+        traces:
+          receivers:  [otlp]
+          processors: [memory_limiter, k8sattributes, resourcedetection, attributes, batch]
+          exporters:  [otlp_http/azuremonitor, debug]
+        metrics:
+          receivers:  [otlp, prometheus]
+          processors: [memory_limiter, k8sattributes, resourcedetection, attributes, batch]
+          exporters:  [otlp_http/azuremonitor, debug]
+        logs:
+          receivers:  [otlp]
+          processors: [memory_limiter, k8sattributes, resourcedetection, attributes, batch]
+          exporters:  [otlp_http/azuremonitor, debug]
+
+---
+# ── Deployment ────────────────────────────────────────────────────────────────
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: otel-collector
+  namespace: observability
+  labels:
+    app: otel-collector
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: otel-collector
+  template:
+    metadata:
+      labels:
+        app: otel-collector
+      annotations:
+        prometheus.io/scrape: "true"
+        prometheus.io/port:   "8888"
+    spec:
+      serviceAccountName: otel-collector
+      containers:
+        - name: otel-collector
+          # Use the contrib image for azuremonitor exporter + k8sattributes
+          image: otel/opentelemetry-collector-contrib:0.149.0
+          args:
+            - --config=/conf/config.yaml
+          env:
+            - name: K8S_CLUSTER_NAME
+              value: "suexemplaraks"                  # ← change to your cluster name
+            - name: APPLICATIONINSIGHTS_CONNECTION_STRING
+              valueFrom:
+                secretKeyRef:
+                  name: azure-monitor-secret
+                  key: APPLICATIONINSIGHTS_CONNECTION_STRING
+          ports:
+            - name: otlp-grpc
+              containerPort: 4317
+              protocol: TCP
+            - name: otlp-http
+              containerPort: 4318
+              protocol: TCP
+            - name: metrics
+              containerPort: 8888
+              protocol: TCP
+            - name: health
+              containerPort: 13133
+              protocol: TCP
+            - name: zpages
+              containerPort: 55679
+              protocol: TCP
+          volumeMounts:
+            - name: config
+              mountPath: /conf
+          livenessProbe:
+            httpGet:
+              path: /
+              port: 13133
+            initialDelaySeconds: 10
+            periodSeconds: 30
+          readinessProbe:
+            httpGet:
+              path: /
+              port: 13133
+            initialDelaySeconds: 5
+            periodSeconds: 10
+          resources:
+            requests:
+              cpu:    100m
+              memory: 200Mi
+            limits:
+              cpu:    500m
+              memory: 500Mi
+      volumes:
+        - name: config
+          configMap:
+            name: otel-collector-config
+
+---
+# ── ClusterIP Service (all pods reach collector via DNS) ──────────────────────
+apiVersion: v1
+kind: Service
+metadata:
+  name: otel-collector
+  namespace: observability
+  labels:
+    app: otel-collector
+spec:
+  selector:
+    app: otel-collector
+  ports:
+    - name: otlp-grpc
+      port: 4317
+      targetPort: 4317
+      protocol: TCP
+    - name: otlp-http
+      port: 4318
+      targetPort: 4318
+      protocol: TCP
+    - name: metrics
+      port: 8888
+      targetPort: 8888
+      protocol: TCP
+    - name: zpages
+      port: 55679
+      targetPort: 55679
+      protocol: TCP
+  type: ClusterIP

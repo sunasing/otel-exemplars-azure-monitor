@@ -39,9 +39,9 @@ Update the below section in the otel-collector.yaml:
 ```yaml
 exporters:
   otlp_http/azuremonitor:
-    metrics_endpoint: "https://otlpdce-ex-bb9p.westus2-1.metrics.ingest.monitor.azure.com/datacollectionRules/dcr-510db2c7534a458a8e8e64a79155b2df/streams/Custom-Metrics-Otel/otlp/v1/metrics"
-    traces_endpoint: "https://otlpdce-ex-bb9p.westus2-1.ingest.monitor.azure.com/datacollectionRules/dcr-510db2c7534a458a8e8e64a79155b2df/streams/Microsoft-OTLP-Traces/otlp/v1/traces"
-    logs_endpoint: "https://otlpdce-ex-bb9p.westus2-1.ingest.monitor.azure.com/datacollectionRules/dcr-510db2c7534a458a8e8e64a79155b2df/streams/Microsoft-OTLP-Logs/otlp/v1/logs"
+    metrics_endpoint: "https://<metrics-ingestion-endpoint>/datacollectionRules/<dcr-immutableid>/streams/Custom-Metrics-Otel/otlp/v1/metrics"
+    traces_endpoint: "https://<logs-ingestion-endpoint>/datacollectionRules/<dcr-immutableid>/streams/Microsoft-OTLP-Traces/otlp/v1/traces"
+    logs_endpoint: "https://<logs-ingestion-endpoint>/datacollectionRules/<dcr-immutableid>/streams/Microsoft-OTLP-Logs/otlp/v1/logs"
     auth:
       authenticator: azure_auth/monitor
 ```

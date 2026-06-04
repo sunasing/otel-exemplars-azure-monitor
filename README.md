@@ -49,35 +49,17 @@ exporters:
 ## Step 2 — Build and push the demo app image
 
 ```bash
-# Log in to ACR
+# Log in to ACR from cli
+az login
+az account set --subscription <subscriptionid>
 az acr login --name <YOUR_ACR>
 
 # Build + push
-docker buildx build \
-  --platform linux/amd64 \
-  -t <YOUR_ACR>.azurecr.io/otel-demo-app:latest \
-  ./app --push
+docker buildx build --platform linux/amd64 -t <YOUR_ACR>.azurecr.io/otel-demo-app:latest . --push
 ```
+You might have to log in to the ACR
 
-
-## Step 3 — Configure secrets and image references
-
-
-> **Tip:** For production, use Azure Key Vault + the Secrets Store CSI Driver instead of a plain Secret.
-
-### 3b. Demo app — point to your ACR image
-
-Edit `k8s/demo-app.yaml`:
-
-```yaml
-image: <YOUR_ACR>.azurecr.io/otel-demo-app:latest
-```
-
-Also update `K8S_CLUSTER_NAME` in both YAML files to match your AKS cluster name.
-
----
-
-## Step 4 — Attach ACR to AKS (if not done already)
+## Step 3 — Attach ACR to AKS (if not done already)
 
 ```bash
 az aks update \
@@ -86,26 +68,31 @@ az aks update \
   --attach-acr <YOUR_ACR>
 ```
 
----
+## Step 4 — Update demo-app.yaml
 
-## Step 5 — Deploy
+Edit `k8s/demo-app.yaml` to use the image that you just created
+
+```yaml
+image: <YOUR_ACR>.azurecr.io/otel-demo-app:latest
+```
+Also update `K8S_CLUSTER_NAME` in both the YAML files to match your AKS cluster name.
+
+## Step 5 — Deploy app
 
 ```bash
 # Connect kubectl to your cluster
 az aks get-credentials --name <AKS_CLUSTER> --resource-group <RESOURCE_GROUP>
 
 # Deploy collector (creates observability namespace, RBAC, etc.)
-kubectl apply -f k8s/otel-collector.yaml
+kubectl apply -f otel-collector.yaml
 
 # Deploy demo app
-kubectl apply -f k8s/demo-app.yaml
+kubectl apply -f demo-app.yaml
 
 # Verify
 kubectl get pods -n observability
 kubectl get pods -n demo
 ```
-
----
 
 ## Step 6 — Send test traffic
 
@@ -113,22 +100,16 @@ kubectl get pods -n demo
 # Port-forward the demo app
 kubectl port-forward -n demo svc/demo-app 8080:80
 
-# In another terminal
-./load-gen.sh http://localhost:8080
+# In another terminal run the below command to generate test traffic
+curl -s -X POST "http://localhost:8080/order" -H "Content-Type: application/json" -d '{"item":"widget"}'
 ```
 
----
+In a browser, go to http://localhost:8080/error, http://localhost:8080/health to generate more traffic.
 
-## What you'll see in Azure Monitor
 
-### Application Map
-Distributed traces showing `demo-service → db-insert-order` spans.
+## Visualize
 
-### Transaction Search
-Individual traces with full span attributes, status codes, and exception details.
-
-### Metrics Explorer
-Custom metrics available immediately after data arrives:
+Following metrics are sent by the app:
 
 | Metric name | Type | Description |
 |-------------|------|-------------|
@@ -139,31 +120,26 @@ Custom metrics available immediately after data arrives:
 
 **Exemplars** link histogram buckets directly to sampled traces — click a spike on the latency chart and jump straight to the offending trace.
 
+### Configure Azure Managed Grafana to use exemplars
+1.	Navigate to Connections -> Data Sources in Azure Managed Grafana. Since you have connected The Azure Managed Grafana to Azure Monitor Workspace, you will see the data source (Managed_Prometheus_<AMW-Name>) already configured. If the data source is not configured, follow the steps here to add your Azure Monitor Workspace as a data source.
+2.	Open the data source configuration.
+3.	Click Add Exemplars to enable exemplar support.
+
+1.	In the exemplar configuration section, toggle Internal Link to On.
+2.	Select Azure Monitor as the data source.
+3.	In the Label Name, enter the name of the field in the labels object that should be used to get the trace id, eg. trace_id.
+4.	Click Save & Test.
+
+1.	Navigate to a Grafana dashboard that uses your configured Prometheus data source.
+2.	Open the panel options for a metrics chart.
+3.	Toggle Exemplars to On.
+
+<img width="628" height="421" alt="image" src="https://github.com/user-attachments/assets/7aa0309f-f6fc-4014-bd0d-e76e2de17415" />
+
 ### Logs
 Structured log records with `trace_id` and `span_id` correlation — find the log in Application Insights **Traces** table and click directly into the parent trace.
 
 ---
-
-## Exemplar deep-dive
-
-Exemplars are enabled via two mechanisms:
-
-1. **SDK side** — the env var `OTEL_METRICS_EXEMPLAR_FILTER=trace_based` tells the OTel Python SDK to attach the current `trace_id` + `span_id` to histogram data points whenever a span is active during `record()` / `add()`.
-
-2. **Collector side** — the `azuremonitor` exporter preserves exemplar fields in the OTLP payload when forwarding histograms to Application Insights.
-
-No extra code is needed; exemplars are emitted automatically on any `histogram.record()` call made inside a span context.
-
----
-
-## Customising the collector
-
-The `otel-collector-config.yaml` (standalone) and the inline ConfigMap in `otel-collector.yaml` are kept in sync. Edit the ConfigMap and run:
-
-```bash
-kubectl apply -f k8s/otel-collector.yaml
-kubectl rollout restart deployment/otel-collector -n observability
-```
 
 ### Useful collector extensions
 
@@ -173,13 +149,3 @@ kubectl rollout restart deployment/otel-collector -n observability
 | Health check | `http://localhost:13133/` |
 
 ---
-
-## Production hardening checklist
-
-- [ ] Replace the plain Secret with Azure Key Vault + CSI driver
-- [ ] Set `debug` exporter `verbosity: basic` or remove it entirely
-- [ ] Tune `batch` processor sizes for your throughput
-- [ ] Add `HorizontalPodAutoscaler` to the collector Deployment
-- [ ] Enable TLS on the OTLP receiver if collector is exposed externally
-- [ ] Add network policies to restrict OTLP traffic to your namespaces
-- [ ] Use Workload Identity for the collector's Service Account (avoids storing secrets at all)

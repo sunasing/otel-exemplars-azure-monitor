@@ -140,7 +140,7 @@ data:
         auth:
           authenticator: azure_auth/monitor
       debug:
-        verbosity: detailed
+        verbosity: basic
         sampling_initial: 5
         sampling_thereafter: 200
 

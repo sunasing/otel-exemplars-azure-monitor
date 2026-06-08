@@ -3,10 +3,10 @@
 This repository has a demo app that sends OpenTelemetry logs, traces, metrics with exemplars to Azure Monitor through OTel Collector. You can view the exemplars in Azure Managed Grafana and open the corresponding distributed trace in Azure Monitor.
 
 ```
-┌──────────────────────────┐   OTLP/gRPC   ┌──────────────────────────┐         ┌────────────────────────────────┐         ┌──────────────────────────┐ 
-│  demo-app (Python/Flask) │ ───────────► │  OTel Collector (contrib) │ ──────► │  Azure Monitor                 │ ──────► │            Visualize     │
-│  namespace: demo         │              │  namespace: observability │         │  Logs and Traces in LAW        |         │   Azure Managed Grafana  │
-│                          |              |                           |         |  Metrics with Exemplars in AMW |
+┌─────────────────────────┐ OTLP/gRPC  ┌──────────────────────────┐      ┌───────────────────────────────┐      ┌──────────────────────────┐ 
+│ demo-app (Python/Flask) │ ─────────► │ OTel Collector (contrib) │ ───► │  Azure Monitor                │ ───► │       Visualize          │
+│ namespace: demo         │            │ namespace: observability │      │  Logs and Traces in LAW       |      │   Azure Managed Grafana  │
+│                         |            |                          |      |  Metrics with Exemplars in AMW|
 
 ```
 
